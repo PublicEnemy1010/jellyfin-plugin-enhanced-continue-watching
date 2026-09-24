@@ -44,7 +44,7 @@ the original plugin goes to them. Please report issues with unmodified behavior 
 1. In the Jellyfin dashboard, open the plugin repository settings and add this repository:
 
    ```text
-   https://plugins.acsheldon.com/manifest.json
+   https://plugins.enemyvault.com/manifest.json
    ```
 
 2. Install `Enhanced Continue Watching` from the plugin catalogue.
