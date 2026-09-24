@@ -10,6 +10,8 @@ public interface ICursorService
     Task OnPlaybackEvent(User user, BaseItem item, PlaybackEvent @event);
 
     Task OnItemRemoved(BaseItem item);
+
+    Task OnItemAdded(BaseItem item);
 }
 
 public interface ICursorHandler

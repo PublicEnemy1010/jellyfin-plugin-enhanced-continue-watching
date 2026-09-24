@@ -5,8 +5,10 @@ using System.Threading.Tasks;
 using Jellyfin.Data;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions;
 using Jellyfin.Plugin.ContinueWatching.Application.Repositories;
+using Jellyfin.Plugin.ContinueWatching.Application.Services.SeriesService;
 using Jellyfin.Plugin.ContinueWatching.Domain;
 using Jellyfin.Plugin.HomeScreenSections.Client;
 using MediaBrowser.Controller.Dto;
@@ -21,7 +23,11 @@ namespace Jellyfin.Plugin.ContinueWatching.Application.Services.Sections;
 
 public sealed class ContinueWatchingSection(
     ICursorRepository cursorRepository,
+    ISeriesCursorRepository seriesCursorRepository,
+    IMovieCursorRepository movieCursorRepository,
+    ISeriesService seriesService,
     IUserManager userManager,
+    IUserDataManager userDataManager,
     ILibraryManager libraryManager,
     IDtoService dtoService,
     ISessionManager sessionManager) : ISectionResultsProvider
@@ -73,6 +79,11 @@ public sealed class ContinueWatchingSection(
         }
 
         var cursors = await cursorRepository.GetByUserId(userId);
+        if (await ReconcilePlayedCursors(user, cursors))
+        {
+            cursors = await cursorRepository.GetByUserId(userId);
+        }
+
         if (cursors.Count == 0)
         {
             return new QueryResult<BaseItemDto>(startIndex, 0, []);
@@ -101,18 +112,19 @@ public sealed class ContinueWatchingSection(
                 .Select(s => s.NowPlayingItem.Id)];
         }
 
+        // Deliberately unpaged: the library cannot sort by Continue Watching recency, so letting
+        // it apply StartIndex/Limit here would pick an arbitrary page by its own ordering and the
+        // most recently watched item could be missing entirely. Paging is applied after the sort.
         QueryResult<BaseItem> itemsResult = libraryManager.GetItemsResult(
             new InternalItemsQuery(user)
             {
-                StartIndex = startIndex,
-                Limit = limit,
                 ParentId = Guid.Empty,
                 Recursive = true,
                 DtoOptions = dtoOptions,
                 MediaTypes = mediaTypes ?? Enum.GetValues<MediaType>(),
                 IsVirtualItem = false,
                 CollapseBoxSetItems = false,
-                EnableTotalRecordCount = enableTotalRecordCount,
+                EnableTotalRecordCount = false,
                 AncestorIds = ancestorIds,
                 IncludeItemTypes = includeItemTypes ?? [],
                 ExcludeItemTypes = excludeItemTypes ?? [],
@@ -123,7 +135,7 @@ public sealed class ContinueWatchingSection(
 
         var cursorByItemId = cursors.ToDictionary(GetItemId);
 
-        var results = dtoService.GetBaseItemDtos(itemsResult.Items, dtoOptions, user)
+        var ordered = dtoService.GetBaseItemDtos(itemsResult.Items, dtoOptions, user)
             .Select(i => (Item: i, Cursor: cursorByItemId.GetValueOrDefault(i.Id)))
             .Where(p => p.Cursor is not null)
             .Cast<(BaseItemDto Item, Cursor Cursor)>()
@@ -131,6 +143,14 @@ public sealed class ContinueWatchingSection(
             .Select(UpdateUserData)
             .Select(p => p.Item)
             .ToList();
+
+        IEnumerable<BaseItemDto> page = ordered.Skip(startIndex ?? 0);
+        if (limit is int pageSize)
+        {
+            page = page.Take(pageSize);
+        }
+
+        var results = page.ToList();
 
         (BaseItemDto Item, Cursor Cursor) UpdateUserData((BaseItemDto Item, Cursor Cursor) arg)
         {
@@ -159,8 +179,75 @@ public sealed class ContinueWatchingSection(
 
         return new QueryResult<BaseItemDto>(
             startIndex,
-            itemsResult.TotalRecordCount,
+            enableTotalRecordCount ? ordered.Count : 0,
             results);
+    }
+
+    private async Task<bool> ReconcilePlayedCursors(User user, IReadOnlyCollection<Cursor> cursors)
+    {
+        bool seriesChanged = false;
+        bool movieChanged = false;
+
+        foreach (Cursor cursor in cursors)
+        {
+            Guid displayItemId = cursor switch
+            {
+                SeriesCursor seriesCursor => seriesCursor.EpisodeId,
+                MovieCursor movieCursor => movieCursor.ItemId,
+                _ => Guid.Empty
+            };
+
+            if (displayItemId == Guid.Empty)
+            {
+                continue;
+            }
+
+            BaseItem? displayItem = libraryManager.GetItemById(displayItemId);
+            if (displayItem is null || !(userDataManager.GetUserData(user, displayItem)?.Played ?? false))
+            {
+                continue;
+            }
+
+            if (cursor is SeriesCursor)
+            {
+                SeriesCursor? trackedCursor = await seriesCursorRepository.TryGet(user.Id, cursor.ItemId);
+                if (trackedCursor is null)
+                {
+                    continue;
+                }
+
+                Guid? nextEpisodeId = await seriesService.GetNextEpisodeId(
+                    user,
+                    cursor.ItemId,
+                    displayItemId);
+
+                trackedCursor.FinishEpisode(nextEpisodeId, DateTimeOffset.UtcNow);
+                seriesChanged = true;
+            }
+            else if (cursor is MovieCursor)
+            {
+                MovieCursor? trackedCursor = await movieCursorRepository.TryGet(user.Id, cursor.ItemId);
+                if (trackedCursor is null)
+                {
+                    continue;
+                }
+
+                trackedCursor.Finish();
+                movieChanged = true;
+            }
+        }
+
+        if (seriesChanged)
+        {
+            await seriesCursorRepository.SaveChanges();
+        }
+
+        if (movieChanged)
+        {
+            await movieCursorRepository.SaveChanges();
+        }
+
+        return seriesChanged || movieChanged;
     }
 
     private static Guid GetItemId(Cursor cursor)

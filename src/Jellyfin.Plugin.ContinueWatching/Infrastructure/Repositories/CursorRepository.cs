@@ -32,4 +32,28 @@ public class CursorRepository(CursorStore cursorStore) : ICursorRepository
 
         return Task.CompletedTask;
     }
+
+    public async Task<bool> DeleteByDisplayItemId(Guid userId, Guid displayItemId)
+    {
+        IReadOnlyCollection<Cursor> cursors = await GetByUserId(userId);
+
+        Cursor? match = cursors.FirstOrDefault(c => GetDisplayItemId(c) == displayItemId);
+        if (match is null)
+        {
+            return false;
+        }
+
+        cursorStore.Delete(new CursorStore.CursorKey(userId, match.ItemId));
+        return true;
+    }
+
+    private static Guid GetDisplayItemId(Cursor cursor)
+    {
+        return cursor switch
+        {
+            SeriesCursor sc => sc.EpisodeId,
+            MovieCursor mc => mc.ItemId,
+            _ => throw new NotImplementedException()
+        };
+    }
 }
