@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common.Configuration;
@@ -11,7 +10,21 @@ using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.ContinueWatching.Infrastructure.Repositories;
 
-public sealed class CursorStore : IHostedService, IDisposable
+/// <summary>
+/// The authoritative play-count ledger.
+/// <para>
+/// Jellyfin's own <c>UserItemData.PlayCount</c> cannot be trusted to accumulate: marking an item
+/// unwatched zeroes it (and nulls <c>LastPlayedDate</c>), and marking an item watched is
+/// idempotent, so it never climbs past 1 from the UI. This store keeps the real count per
+/// (user, item) and <see cref="Services.PlayCountService.PlayCountService"/> writes it back over
+/// whatever Jellyfin persisted.
+/// </para>
+/// <para>
+/// Persistence mirrors <see cref="CursorStore"/>: in-memory, flushed to disk every 30s and on a
+/// graceful shutdown, written via a temp file and an atomic rename.
+/// </para>
+/// </summary>
+public sealed class PlayCountStore : IHostedService, IDisposable
 {
     private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(30);
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -19,16 +32,16 @@ public sealed class CursorStore : IHostedService, IDisposable
         WriteIndented = true,
     };
 
-    private readonly Dictionary<CursorKey, CursorDto> _cursors = [];
+    private readonly Dictionary<PlayCountKey, PlayCountDto> _counts = [];
     private readonly ReaderWriterLockSlim _lock = new();
     private readonly SemaphoreSlim _flushLock = new(1, 1);
-    private readonly ILogger<CursorStore> _logger;
+    private readonly ILogger<PlayCountStore> _logger;
     private readonly string _filePath;
     private CancellationTokenSource? _stoppingTokenSource;
     private Task? _flushTask;
     private int _dirty;
 
-    public CursorStore(IApplicationPaths applicationPaths, ILogger<CursorStore> logger)
+    public PlayCountStore(IApplicationPaths applicationPaths, ILogger<PlayCountStore> logger)
     {
         ArgumentNullException.ThrowIfNull(applicationPaths);
         _logger = logger;
@@ -37,20 +50,15 @@ public sealed class CursorStore : IHostedService, IDisposable
 
         Directory.CreateDirectory(directoryPath);
 
-        _filePath = Path.Combine(directoryPath, "cursors.json");
+        _filePath = Path.Combine(directoryPath, "playcounts.json");
     }
 
-    static CursorStore()
-    {
-        JsonOptions.Converters.Add(new JsonStringEnumConverter());
-    }
-
-    public T Read<T>(Func<IReadOnlyDictionary<CursorKey, CursorDto>, T> reader)
+    public PlayCountDto? TryGet(PlayCountKey key)
     {
         _lock.EnterReadLock();
         try
         {
-            return reader.Invoke(_cursors);
+            return _counts.GetValueOrDefault(key);
         }
         finally
         {
@@ -58,12 +66,49 @@ public sealed class CursorStore : IHostedService, IDisposable
         }
     }
 
-    public void Upsert(CursorKey key, CursorDto cursor)
+    /// <summary>
+    /// Raises the stored count to <paramref name="count"/> and returns the value now held.
+    /// The ledger is a high-water mark, so a lower value is ignored -- that is what makes a
+    /// count survive an unwatch. Use <see cref="Set"/> when the caller is authoritative.
+    /// </summary>
+    public int RaiseTo(PlayCountKey key, int count, DateTimeOffset? lastCountedUtc)
     {
         _lock.EnterWriteLock();
         try
         {
-            _cursors[key] = cursor;
+            PlayCountDto? existing = _counts.GetValueOrDefault(key);
+            if (existing is not null && existing.Count >= count)
+            {
+                return existing.Count;
+            }
+
+            // An item nobody has played has nothing to protect; storing a zero would only
+            // grow the ledger with entries that can never change an outcome.
+            if (existing is null && count <= 0)
+            {
+                return 0;
+            }
+
+            _counts[key] = new PlayCountDto(
+                key.UserId,
+                key.ItemId,
+                count,
+                lastCountedUtc ?? existing?.LastCountedUtc);
+            Interlocked.Exchange(ref _dirty, 1);
+            return count;
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+    }
+
+    public void Set(PlayCountKey key, int count, DateTimeOffset? lastCountedUtc)
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            _counts[key] = new PlayCountDto(key.UserId, key.ItemId, count, lastCountedUtc);
             Interlocked.Exchange(ref _dirty, 1);
         }
         finally
@@ -72,46 +117,29 @@ public sealed class CursorStore : IHostedService, IDisposable
         }
     }
 
-    public void Delete(CursorKey key)
-    {
-        _lock.EnterWriteLock();
-        try
-        {
-            if (_cursors.Remove(key))
-            {
-                Interlocked.Exchange(ref _dirty, 1);
-            }
-        }
-        finally
-        {
-            _lock.ExitWriteLock();
-        }
-    }
-
     /// <summary>
-    /// Deletes every cursor last updated before <paramref name="cutoff"/>.
+    /// Adds one to the stored count unless the previous increment landed inside
+    /// <paramref name="dedupeWindow"/>. Returns the count now held, and whether it moved.
     /// </summary>
-    /// <returns>The number of cursors deleted.</returns>
-    public int DeleteUpdatedBefore(DateTimeOffset cutoff)
+    public (int Count, bool Incremented) Increment(
+        PlayCountKey key,
+        DateTimeOffset now,
+        TimeSpan dedupeWindow)
     {
         _lock.EnterWriteLock();
         try
         {
-            int removed = 0;
-            foreach (KeyValuePair<CursorKey, CursorDto> entry in _cursors)
+            PlayCountDto? existing = _counts.GetValueOrDefault(key);
+
+            if (existing?.LastCountedUtc is { } lastCounted && now - lastCounted < dedupeWindow)
             {
-                if (entry.Value.UpdatedAtUtc < cutoff && _cursors.Remove(entry.Key))
-                {
-                    removed++;
-                }
+                return (existing.Count, false);
             }
 
-            if (removed > 0)
-            {
-                Interlocked.Exchange(ref _dirty, 1);
-            }
-
-            return removed;
+            int next = (existing?.Count ?? 0) + 1;
+            _counts[key] = new PlayCountDto(key.UserId, key.ItemId, next, now);
+            Interlocked.Exchange(ref _dirty, 1);
+            return (next, true);
         }
         finally
         {
@@ -168,25 +196,27 @@ public sealed class CursorStore : IHostedService, IDisposable
         try
         {
             await using FileStream stream = File.OpenRead(_filePath);
-            List<CursorDto>? cursors = await JsonSerializer.DeserializeAsync<List<CursorDto>>(stream, JsonOptions);
+            List<PlayCountDto>? counts = await JsonSerializer.DeserializeAsync<List<PlayCountDto>>(stream, JsonOptions);
 
-            if (cursors is null)
+            if (counts is null)
             {
                 return;
             }
 
-            foreach (CursorDto cursor in cursors)
+            foreach (PlayCountDto count in counts)
             {
-                _cursors[CursorKey.From(cursor)] = cursor;
+                _counts[new PlayCountKey(count.UserId, count.ItemId)] = count;
             }
+
+            _logger.LogInformation("Loaded {Count} play-count ledger entries from {FilePath}", _counts.Count, _filePath);
         }
         catch (IOException exception)
         {
-            _logger.LogError(exception, "Failed to load cursor cache from {FilePath}", _filePath);
+            _logger.LogError(exception, "Failed to load the play-count ledger from {FilePath}", _filePath);
         }
         catch (JsonException exception)
         {
-            _logger.LogError(exception, "Cursor cache at {FilePath} is not valid JSON", _filePath);
+            _logger.LogError(exception, "The play-count ledger at {FilePath} is not valid JSON", _filePath);
         }
     }
 
@@ -206,7 +236,7 @@ public sealed class CursorStore : IHostedService, IDisposable
                 {
                     _logger.LogError(
                         exception,
-                        "Failed to flush cursor cache to {FilePath}; the next interval will retry",
+                        "Failed to flush the play-count ledger to {FilePath}; the next interval will retry",
                         _filePath);
                 }
             }
@@ -226,7 +256,7 @@ public sealed class CursorStore : IHostedService, IDisposable
         await _flushLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            IReadOnlyList<CursorDto> cursorsToWrite;
+            IReadOnlyList<PlayCountDto> countsToWrite;
             _lock.EnterReadLock();
             try
             {
@@ -240,7 +270,7 @@ public sealed class CursorStore : IHostedService, IDisposable
                     Interlocked.Exchange(ref _dirty, 0);
                 }
 
-                cursorsToWrite = [.. _cursors.Values];
+                countsToWrite = [.. _counts.Values];
             }
             finally
             {
@@ -259,7 +289,7 @@ public sealed class CursorStore : IHostedService, IDisposable
             {
                 await JsonSerializer.SerializeAsync(
                     stream,
-                    cursorsToWrite,
+                    countsToWrite,
                     JsonOptions,
                     cancellationToken).ConfigureAwait(false);
 
@@ -279,24 +309,12 @@ public sealed class CursorStore : IHostedService, IDisposable
         }
     }
 
-    public readonly record struct CursorKey(Guid UserId, Guid ItemId)
-    {
-        public static CursorKey From(CursorDto cursor) => new(cursor.UserId, cursor.ItemId);
-    }
+    public readonly record struct PlayCountKey(Guid UserId, Guid ItemId);
 }
 
-public enum CursorType
-{
-    Series,
-    Movie
-}
-
-public sealed record CursorDto(
-    CursorType Type,
+public sealed record PlayCountDto(
     Guid UserId,
     Guid ItemId,
-    Guid? EpisodeId,
-    long PositionTicks,
-    DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc
+    int Count,
+    DateTimeOffset? LastCountedUtc
 );

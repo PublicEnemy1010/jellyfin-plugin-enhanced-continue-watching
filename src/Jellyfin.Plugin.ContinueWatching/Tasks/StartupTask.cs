@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Threading;
 using System;
 using Jellyfin.Plugin.ContinueWatching.Application.Services.Sections;
+using Jellyfin.Plugin.ContinueWatching.Web;
 
 namespace Jellyfin.Plugin.ContinueWatching.Tasks;
 
@@ -25,19 +26,32 @@ public sealed class StartupTask(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        bool registered = sectionsClient.TryRegisterSection<ContinueWatchingSection>(
-            new SectionDefinition
-            {
-                Id = Guid.Parse("e516c102-407e-449c-b342-04ebf1e89812"),
-                DisplayText = "Continue Watching",
-                Limit = 1,
-            });
-
-        if (!registered)
+        // An installed but incompatible Home Screen Sections throws here. Contain it so the
+        // File Transformation registration below still runs and the menu button is injected.
+        try
         {
-            logger.LogWarning(
-                "Home Screen Sections is unavailable; the Continue Watching section was not registered");
+            bool registered = sectionsClient.TryRegisterSection<ContinueWatchingSection>(
+                new SectionDefinition
+                {
+                    Id = Guid.Parse("e516c102-407e-449c-b342-04ebf1e89812"),
+                    DisplayText = "Continue Watching",
+                    Limit = 1,
+                });
+
+            if (!registered)
+            {
+                logger.LogWarning(
+                    "Home Screen Sections is unavailable; the Continue Watching section was not registered");
+            }
         }
+        catch (SectionsException exception)
+        {
+            logger.LogError(
+                exception,
+                "Home Screen Sections rejected the Continue Watching section; it was not registered");
+        }
+
+        FileTransformationRegistrar.TryRegister(logger);
 
         progress.Report(100);
         return Task.CompletedTask;

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.ContinueWatching.Application.Repositories;
 using Jellyfin.Plugin.ContinueWatching.Domain;
@@ -33,22 +32,6 @@ public sealed class SeriesCursorRepository(CursorStore cursorStore) : ISeriesCur
         return Task.FromResult<SeriesCursor?>(cursor);
     }
 
-    public IReadOnlyList<SeriesCursor> GetByUser(Guid userId)
-    {
-        foreach (CursorDto cursorDto in cursorStore.Read(d => d.Values
-            .Where(c => c.Type == CursorType.Series && c.UserId == userId)
-            .ToList()))
-        {
-            SeriesCursor cursor = ToEntity(cursorDto);
-            var key = new CursorKey(cursor.UserId, cursor.ItemId);
-            _trackedCursors.TryAdd(key, cursor);
-        }
-
-        return [.. _trackedCursors.Values
-            .Where(cursor => cursor.UserId == userId && !cursor.Finished)
-            .OrderByDescending(static cursor => cursor.UpdatedAt)];
-    }
-
     public Task Add(SeriesCursor cursor)
     {
         _trackedCursors[new CursorKey(cursor.UserId, cursor.ItemId)] = cursor;
@@ -60,13 +43,25 @@ public sealed class SeriesCursorRepository(CursorStore cursorStore) : ISeriesCur
     {
         foreach (var (key, cursor) in _trackedCursors)
         {
-            if (cursor.Finished)
+            // Only cursors this scope actually changed may be written back. Playback events and
+            // Continue Watching reads run concurrently in separate scopes over the same store,
+            // so persisting an untouched snapshot here would revert whichever update landed
+            // while this scope was working -- the stale-card bug that reload could not fix.
+            if (!cursor.Dirty)
             {
-                cursorStore.Delete(key);
                 continue;
             }
 
-            cursorStore.Upsert(key, ToDto(cursor));
+            if (cursor.Finished)
+            {
+                cursorStore.Delete(key);
+            }
+            else
+            {
+                cursorStore.Upsert(key, ToDto(cursor));
+            }
+
+            cursor.MarkPersisted();
         }
 
         return Task.CompletedTask;

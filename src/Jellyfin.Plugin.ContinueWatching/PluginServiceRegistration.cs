@@ -1,6 +1,7 @@
 using Jellyfin.Plugin.ContinueWatching.Application.Repositories;
 using Jellyfin.Plugin.ContinueWatching.Application.Services;
 using Jellyfin.Plugin.ContinueWatching.Application.Services.CursorService;
+using Jellyfin.Plugin.ContinueWatching.Application.Services.PlayCountService;
 using Jellyfin.Plugin.ContinueWatching.Application.Services.Sections;
 using Jellyfin.Plugin.ContinueWatching.Application.Services.SeriesService;
 using Jellyfin.Plugin.ContinueWatching.Controllers;
@@ -30,11 +31,15 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
                     "GetResumeItemsLegacy"));
             });
         services.AddSingleton<CursorStore>();
+        services.AddSingleton<PlayCountStore>();
         services.AddScoped<ISeriesCursorRepository, SeriesCursorRepository>();
         services.AddScoped<IMovieCursorRepository, MovieCursorRepository>();
         services.AddScoped<ICursorRepository, CursorRepository>();
         services.AddHostedService(
             static serviceProvider => serviceProvider.GetRequiredService<CursorStore>());
+        services.AddHostedService(
+            static serviceProvider => serviceProvider.GetRequiredService<PlayCountStore>());
+        services.AddScoped<IPlayCountService, PlayCountService>();
         services.AddScoped<ICursorService, CursorService>();
         services.AddScoped<ICursorHandler, SeriesCursorPlaybackHandler>();
         services.AddScoped<ICursorHandler, MovieCursorPlaybackHandler>();

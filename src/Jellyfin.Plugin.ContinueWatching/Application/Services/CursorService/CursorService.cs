@@ -10,7 +10,11 @@ using MediaBrowser.Controller.Library;
 
 namespace Jellyfin.Plugin.ContinueWatching.Application.Services.CursorService;
 
-public sealed class CursorService(IEnumerable<ICursorHandler> handlers, ILibraryManager libraryManager, ICursorRepository cursorRepository) : ICursorService
+public sealed class CursorService(
+    IEnumerable<ICursorHandler> handlers,
+    ILibraryManager libraryManager,
+    ICursorRepository cursorRepository,
+    IUserManager userManager) : ICursorService
 {
     public Task OnPlaybackEvent(User user, BaseItem item, PlaybackEvent @event)
     {
@@ -18,6 +22,20 @@ public sealed class CursorService(IEnumerable<ICursorHandler> handlers, ILibrary
         return handler is null
             ? Task.CompletedTask
             : handler.Handle(user, item, @event);
+    }
+
+    public async Task OnItemAdded(BaseItem item)
+    {
+        ICursorHandler? handler = handlers.FirstOrDefault(handler => handler.CanHandle(item));
+        if (handler is null)
+        {
+            return;
+        }
+
+        foreach (User user in userManager.GetUsers())
+        {
+            await handler.Handle(user, item, NewEpisodeAvailableEvent.Instance);
+        }
     }
 
     public async Task OnItemRemoved(BaseItem item)

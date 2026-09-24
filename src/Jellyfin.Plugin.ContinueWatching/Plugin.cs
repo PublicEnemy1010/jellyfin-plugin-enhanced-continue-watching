@@ -8,9 +8,9 @@ namespace Jellyfin.Plugin.ContinueWatching;
 
 public class Plugin : IPlugin
 {
-    public Guid Id { get; } = Guid.Parse("7b3f1b70-4d0e-4d9d-a92d-5e2f632b91c1");
+    public Guid Id { get; } = Guid.Parse("7dac1912-44c9-485a-a7bd-df8abc1bc9d3");
 
-    public string Name => "Continue Watching";
+    public string Name => "Enhanced Continue Watching";
 
     public string Description => "Continue Watching updates Jellyfin's default resume list to work like you expect it to.";
 
