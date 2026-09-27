@@ -17,6 +17,7 @@ namespace Jellyfin.Plugin.ContinueWatching;
 public class PluginServiceRegistrator : IPluginServiceRegistrator
 {
     private const string JellyfinItemsControllerFullName = "Jellyfin.Api.Controllers.ItemsController";
+    private const string JellyfinTvShowsControllerFullName = "Jellyfin.Api.Controllers.TvShowsController";
 
     public void RegisterServices(IServiceCollection services, IServerApplicationHost applicationHost)
     {
@@ -29,6 +30,10 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
                 options.Conventions.Add(new RemoveActionConvention(
                     JellyfinItemsControllerFullName,
                     "GetResumeItemsLegacy"));
+                options.Conventions.Add(new AddActionFilterConvention(
+                    JellyfinTvShowsControllerFullName,
+                    "GetNextUp",
+                    new HideNextUpFilter()));
             });
         services.AddSingleton<CursorStore>();
         services.AddSingleton<PlayCountStore>();

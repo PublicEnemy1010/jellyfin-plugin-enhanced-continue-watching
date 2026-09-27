@@ -38,10 +38,11 @@ public sealed class StartupTask(
                     Limit = 1,
                 });
 
+            // Home Screen Sections is optional, so its absence doesn't warrant a warning.
             if (!registered)
             {
-                logger.LogWarning(
-                    "Home Screen Sections is unavailable; the Continue Watching section was not registered");
+                logger.LogInformation(
+                    "Home Screen Sections is not installed; the Continue Watching section was not registered");
             }
         }
         catch (SectionsException exception)

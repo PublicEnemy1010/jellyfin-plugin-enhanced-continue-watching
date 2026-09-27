@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Enhanced Continue Watching</title>
+</head>
+<body>
+    <div id="ContinueWatchingConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="ContinueWatchingConfigForm">
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label">
+                            <input id="HideNextUp" name="HideNextUp" type="checkbox" is="emby-checkbox" />
+                            <span>Hide Next Up</span>
+                        </label>
+                        <div class="fieldDescription checkboxFieldDescription">
+                            Removes Jellyfin's Next Up list from the home screen and TV libraries in every client.
+                            Continue Watching already shows each series' next episode. A series' own page keeps its Next Up.
+                        </div>
+                    </div>
+                    <div>
+                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                            <span>Save</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        <script type="text/javascript">
+            var ContinueWatchingConfig = {
+                pluginUniqueId: '7dac1912-44c9-485a-a7bd-df8abc1bc9d3'
+            };
+
+            document.querySelector('#ContinueWatchingConfigPage')
+                .addEventListener('pageshow', function () {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(ContinueWatchingConfig.pluginUniqueId).then(function (config) {
+                        document.querySelector('#HideNextUp').checked = config.HideNextUp;
+                        Dashboard.hideLoadingMsg();
+                    });
+                });
+
+            document.querySelector('#ContinueWatchingConfigForm')
+                .addEventListener('submit', function (e) {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(ContinueWatchingConfig.pluginUniqueId).then(function (config) {
+                        config.HideNextUp = document.querySelector('#HideNextUp').checked;
+                        ApiClient.updatePluginConfiguration(ContinueWatchingConfig.pluginUniqueId, config).then(function (result) {
+                            Dashboard.processPluginConfigurationUpdateResult(result);
+                        });
+                    });
+
+                    e.preventDefault();
+                    return false;
+                });
+        </script>
+    </div>
+</body>
+</html>

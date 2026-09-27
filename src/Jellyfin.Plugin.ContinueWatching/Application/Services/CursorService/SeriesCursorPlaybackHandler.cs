@@ -174,12 +174,15 @@ public sealed class SeriesCursorPlaybackHandler(
                 return;
             }
 
-            bool allOtherEpisodesWatched = await seriesService.AreAllOtherEpisodesWatched(
+            // Earlier episodes only: when several episodes arrive together, each one sees the
+            // others as unwatched, so "every other episode" would never hold. The earliest new
+            // episode passes and opens the cursor; the rest find it already there.
+            bool allEarlierEpisodesWatched = await seriesService.AreAllEarlierEpisodesWatched(
                 user,
                 episode.SeriesId,
                 episode.Id);
 
-            if (!allOtherEpisodesWatched)
+            if (!allEarlierEpisodesWatched)
             {
                 return;
             }

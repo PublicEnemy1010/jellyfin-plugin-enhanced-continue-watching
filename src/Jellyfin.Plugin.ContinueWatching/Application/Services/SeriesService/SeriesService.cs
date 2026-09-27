@@ -61,7 +61,7 @@ public sealed class SeriesService(ILibraryManager libraryManager, IUserDataManag
         return Task.FromResult(firstUnwatched?.Id);
     }
 
-    public Task<bool> AreAllOtherEpisodesWatched(User user, Guid seriesId, Guid exceptEpisodeId)
+    public Task<bool> AreAllEarlierEpisodesWatched(User user, Guid seriesId, Guid episodeId)
     {
         if (seriesId == Guid.Empty)
         {
@@ -77,20 +77,32 @@ public sealed class SeriesService(ILibraryManager libraryManager, IUserDataManag
 
         var options = new DtoOptions(false);
 
-        var otherEpisodes = series.GetEpisodes(user, options, false)
+        var episodes = series.GetEpisodes(user, options, false)
             .OfType<Episode>()
-            .Where(e => !e.IsMissingEpisode && e.Id != exceptEpisodeId)
+            .Where(e => !e.IsMissingEpisode)
             .ToList();
 
-        // A series with no other episodes isn't a "fully watched show" gaining a new
-        // episode -- it's a brand new show, which shouldn't jump into Continue Watching
-        // just because its first episode was added to the library.
-        if (otherEpisodes.Count == 0)
+        int index = episodes.FindIndex(e => e.Id == episodeId);
+        if (index < 0)
         {
             return Task.FromResult(false);
         }
 
-        return Task.FromResult(otherEpisodes.All(e => IsWatched(user, e)));
+        // Specials are often skipped, so an unwatched one shouldn't keep a finished show
+        // from coming back.
+        var earlierEpisodes = episodes
+            .Take(index)
+            .Where(e => e.ParentIndexNumber != 0)
+            .ToList();
+
+        // Nothing earlier means a brand new show, which shouldn't jump into Continue Watching
+        // just because its first episode was added to the library.
+        if (earlierEpisodes.Count == 0)
+        {
+            return Task.FromResult(false);
+        }
+
+        return Task.FromResult(earlierEpisodes.All(e => IsWatched(user, e)));
     }
 
     private bool IsWatched(User user, BaseItem episode) =>

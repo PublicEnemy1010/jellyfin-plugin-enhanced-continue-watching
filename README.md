@@ -22,6 +22,8 @@ the original plugin goes to them. Please report issues with unmodified behavior 
 - Resume positions and played state are cleared correctly when rewatching or marking watched.
 - Hardening so plugin event handlers and incomplete episodes can't crash Jellyfin.
 - Fewer redundant Continue Watching refreshes in Jellyfin Web.
+- Jellyfin's Next Up list is hidden by default, since Continue Watching already shows each
+  series' next episode. Turn it back on from the plugin's settings page.
 
 ## Features
 

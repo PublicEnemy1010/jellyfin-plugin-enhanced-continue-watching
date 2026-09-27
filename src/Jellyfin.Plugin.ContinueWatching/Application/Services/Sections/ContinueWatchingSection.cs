@@ -33,9 +33,11 @@ public sealed class ContinueWatchingSection(
     ISessionManager sessionManager) : ISectionResultsProvider
 {
 
+    // Home Screen Sections calls this synchronously through reflection, so it has to block.
+    // GetAwaiter().GetResult() rethrows the original exception rather than an AggregateException.
     public QueryResult<BaseItemDto> GetResults(SectionRequest request)
     {
-        var result = GetItemsAsync(
+        return GetItemsAsync(
             request.UserId,
             startIndex: null,
             limit: 12,
@@ -48,10 +50,7 @@ public sealed class ContinueWatchingSection(
             enableImageTypes: [ImageType.Primary, ImageType.Backdrop, ImageType.Thumb],
             excludeItemTypes: [],
             includeItemTypes: [],
-            enableTotalRecordCount: false);
-
-        result.Wait();
-        return result.Result;
+            enableTotalRecordCount: false).GetAwaiter().GetResult();
     }
 
     public async Task<QueryResult<BaseItemDto>> GetItemsAsync(

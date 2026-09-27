@@ -1,31 +1,38 @@
 using System;
-using System.IO;
-using System.Reflection;
+using System.Collections.Generic;
+using Jellyfin.Plugin.ContinueWatching.Configuration;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
+using MediaBrowser.Model.Serialization;
 
 namespace Jellyfin.Plugin.ContinueWatching;
 
-public class Plugin : IPlugin
+public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
-    public Guid Id { get; } = Guid.Parse("7dac1912-44c9-485a-a7bd-df8abc1bc9d3");
+    public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
+        : base(applicationPaths, xmlSerializer)
+    {
+        Instance = this;
+    }
 
-    public string Name => "Enhanced Continue Watching";
+    public static Plugin? Instance { get; private set; }
 
-    public string Description => "Continue Watching updates Jellyfin's default resume list to work like you expect it to.";
+    public override Guid Id { get; } = Guid.Parse("7dac1912-44c9-485a-a7bd-df8abc1bc9d3");
 
-    public Version Version { get; } = typeof(Plugin).Assembly.GetName().Version!;
+    public override string Name => "Enhanced Continue Watching";
 
-    public string AssemblyFilePath { get; } = typeof(Plugin).Assembly.Location;
+    public override string Description => "Continue Watching updates Jellyfin's default resume list to work like you expect it to.";
 
-    public bool CanUninstall => !string.Equals(
-        Path.GetDirectoryName(AssemblyFilePath),
-        Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location),
-        StringComparison.Ordinal);
-
-    public string DataFolderPath { get; } = string.Empty;
-
-    public PluginInfo GetPluginInfo() => new(Name, Version, Description, Id, CanUninstall);
-
-    public void OnUninstalling() { }
+    public IEnumerable<PluginPageInfo> GetPages()
+    {
+        return
+        [
+            new PluginPageInfo
+            {
+                Name = Name,
+                EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html"
+            }
+        ];
+    }
 }

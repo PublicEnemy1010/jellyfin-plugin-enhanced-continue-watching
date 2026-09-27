@@ -20,8 +20,9 @@ public interface ISeriesService
     Task<Guid?> GetFirstUnwatchedEpisodeId(User user, Guid seriesId);
 
     /// <summary>
-    /// Returns whether every episode of the series other than <paramref name="exceptEpisodeId"/>
-    /// has already been watched by the user.
+    /// Returns whether the user has watched every episode that comes before
+    /// <paramref name="episodeId"/> in series order, ignoring specials. <c>false</c> when there
+    /// is no earlier episode, or when the episode isn't in the series.
     /// </summary>
-    Task<bool> AreAllOtherEpisodesWatched(User user, Guid seriesId, Guid exceptEpisodeId);
+    Task<bool> AreAllEarlierEpisodesWatched(User user, Guid seriesId, Guid episodeId);
 }

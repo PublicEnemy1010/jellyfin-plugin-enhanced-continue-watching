@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.ContinueWatching.Application.Services.CursorService;
@@ -22,6 +23,16 @@ public class EventListener(
     IServiceScopeFactory scopeFactory,
     ILogger<EventListener> logger) : IHostedService
 {
+    // How long an episode added without a series id is remembered while waiting for the
+    // metadata refresh that fills it in. The refresh normally follows within seconds.
+    private static readonly TimeSpan PendingEpisodeLifetime = TimeSpan.FromHours(6);
+
+    // Episodes whose ItemAdded arrived before Jellyfin linked them to a series, keyed by
+    // id with the time they were added.
+    private readonly ConcurrentDictionary<Guid, DateTime> pendingEpisodes = new();
+
+    private DateTime nextPendingPruneUtc = DateTime.MinValue;
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
         sessionManager.PlaybackStart += PlaybackStarted;
@@ -29,6 +40,7 @@ public class EventListener(
         sessionManager.PlaybackStopped += PlaybackStopped;
         libraryManager.ItemRemoved += ItemRemoved;
         libraryManager.ItemAdded += ItemAdded;
+        libraryManager.ItemUpdated += ItemUpdated;
         userDataManager.UserDataSaved += UserDataSaved;
         return Task.CompletedTask;
     }
@@ -151,25 +163,73 @@ public class EventListener(
                 return;
             }
 
-            // Jellyfin may publish ItemAdded while an episode is only partially populated;
-            // there is no valid series cursor to update until the relationship exists.
+            // Jellyfin raises ItemAdded straight after the first save, and a scanned episode
+            // usually has no series id until the metadata refresh that follows. That refresh
+            // raises ItemUpdated, so park the episode and handle it there.
             if (episode.SeriesId == Guid.Empty)
             {
-                logger.LogWarning(
-                    "Skipping newly added episode {EpisodeId} because it has no series id yet",
+                PrunePendingEpisodes();
+                pendingEpisodes[episode.Id] = DateTime.UtcNow;
+                logger.LogDebug(
+                    "Newly added episode {EpisodeId} has no series id yet; waiting for its metadata refresh",
                     episode.Id);
                 return;
             }
 
-            using IServiceScope scope = scopeFactory.CreateScope();
-
-            var cursorService = scope.ServiceProvider.GetRequiredService<ICursorService>();
-            await cursorService.OnItemAdded(args.Item);
+            await HandleNewEpisode(episode);
         }
         catch (Exception exception)
         {
             // Exceptions escaping an async-void event callback terminate Jellyfin.
             logger.LogError(exception, "Failed to process added library item {ItemId}", args.Item.Id);
+        }
+    }
+
+    private async void ItemUpdated(object? sender, ItemChangeEventArgs args)
+    {
+        try
+        {
+            // Every library update lands here, so keep the common path to a type check and
+            // one dictionary lookup.
+            if (args.Item is not Episode episode
+                || episode.SeriesId == Guid.Empty
+                || !pendingEpisodes.TryRemove(episode.Id, out _))
+            {
+                return;
+            }
+
+            await HandleNewEpisode(episode);
+        }
+        catch (Exception exception)
+        {
+            // Exceptions escaping an async-void event callback terminate Jellyfin.
+            logger.LogError(exception, "Failed to process updated library item {ItemId}", args.Item?.Id);
+        }
+    }
+
+    private async Task HandleNewEpisode(Episode episode)
+    {
+        using IServiceScope scope = scopeFactory.CreateScope();
+
+        var cursorService = scope.ServiceProvider.GetRequiredService<ICursorService>();
+        await cursorService.OnItemAdded(episode);
+    }
+
+    private void PrunePendingEpisodes()
+    {
+        DateTime now = DateTime.UtcNow;
+        if (now < nextPendingPruneUtc)
+        {
+            return;
+        }
+
+        nextPendingPruneUtc = now.AddMinutes(10);
+        foreach (var (episodeId, addedUtc) in pendingEpisodes)
+        {
+            if (now - addedUtc > PendingEpisodeLifetime)
+            {
+                pendingEpisodes.TryRemove(episodeId, out _);
+            }
         }
     }
 
@@ -229,6 +289,7 @@ public class EventListener(
         sessionManager.PlaybackStopped -= PlaybackStopped;
         libraryManager.ItemRemoved -= ItemRemoved;
         libraryManager.ItemAdded -= ItemAdded;
+        libraryManager.ItemUpdated -= ItemUpdated;
         userDataManager.UserDataSaved -= UserDataSaved;
         return Task.CompletedTask;
     }
