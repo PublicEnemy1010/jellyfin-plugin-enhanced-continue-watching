@@ -1,7 +1,7 @@
 ---
 name: "Enhanced Continue Watching"
 guid: "7dac1912-44c9-485a-a7bd-df8abc1bc9d3"
-version: "2.1.0.0"
+version: "2.2.0.0"
 targetAbi: "12.0.0.0"
 framework: "net10.0"
 overview: "Continue Watching updates Jellyfin's default resume list to work like you expect it to"
@@ -15,7 +15,7 @@ artifacts:
 - "Jellyfin.Plugin.ContinueWatching.dll"
 - "Jellyfin.Plugin.HomeScreenSections.Client.dll"
 changelog: >
-  Hides Jellyfin's Next Up list by default, since Continue Watching already shows each series' next
-  episode; turn it back on from the plugin's settings page. Finished shows now come back to Continue
-  Watching when a new episode is added (this never triggered before). Servers without Home Screen
-  Sections no longer log a warning on every start.
+  Continue Watching entries now survive an episode's file being replaced (a quality upgrade or a
+  move to another library folder) and keep their place in the row, and a replaced or duplicate
+  episode no longer brings a finished show back. A show split across library folders gets one entry.
+  Clients that sort the row by last-played date (Moonfin, Wholphin) now keep the server's order.

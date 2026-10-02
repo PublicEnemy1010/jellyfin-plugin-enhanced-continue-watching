@@ -53,6 +53,16 @@ public abstract class Cursor
     }
 
     /// <summary>
+    /// Records a change that must not move the entry in Continue Watching, so
+    /// <see cref="UpdatedAt"/> is left alone.
+    /// </summary>
+    protected void MarkChanged(long positionTicks)
+    {
+        PositionTicks = positionTicks;
+        Dirty = true;
+    }
+
+    /// <summary>
     /// Called by a repository once this cursor's current state has reached the store.
     /// </summary>
     internal void MarkPersisted() => Dirty = false;

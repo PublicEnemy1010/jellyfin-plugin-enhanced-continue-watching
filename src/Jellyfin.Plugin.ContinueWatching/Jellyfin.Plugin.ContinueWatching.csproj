@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Version>2.1.0.0</Version>
+    <Version>2.2.0.0</Version>
     <Nullable>enable</Nullable>
     <CopyToLocalJellyfin Condition="'$(CopyToLocalJellyfin)' == ''">true</CopyToLocalJellyfin>
     <JellyfinPluginDirectory Condition="'$(JellyfinPluginDirectory)' == ''">$(HOME)/.local/share/jellyfin/plugins/ContinueWatching</JellyfinPluginDirectory>
@@ -10,6 +10,8 @@
   <ItemGroup>
     <None Remove="Configuration/configPage.html" />
     <EmbeddedResource Include="Configuration/configPage.html" />
+    <None Remove="Web/continueWatchingMenu.js" />
+    <EmbeddedResource Include="Web/continueWatchingMenu.js" />
   </ItemGroup>
 
   <ItemGroup>

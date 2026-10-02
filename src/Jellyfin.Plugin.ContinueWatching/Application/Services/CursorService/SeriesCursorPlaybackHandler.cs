@@ -107,7 +107,7 @@ public sealed class SeriesCursorPlaybackHandler(
         {
             // If Continue Watching already points at a different episode of this series,
             // marking some other episode played manually shouldn't move the cursor there.
-            SeriesCursor? existingCursor = await cursorRepository.TryGet(user.Id, episode.SeriesId);
+            SeriesCursor? existingCursor = await FindCursor(user, episode);
             if (existingCursor is not null && existingCursor.EpisodeId != episode.Id)
             {
                 return;
@@ -133,7 +133,7 @@ public sealed class SeriesCursorPlaybackHandler(
 
         if (@event is ItemMarkedUnplayedEvent)
         {
-            SeriesCursor? cursor = await cursorRepository.TryGet(user.Id, episode.SeriesId);
+            SeriesCursor? cursor = await FindCursor(user, episode);
 
             if (cursor is not null && cursor.EpisodeId == episode.Id)
             {
@@ -167,7 +167,7 @@ public sealed class SeriesCursorPlaybackHandler(
 
         if (@event is NewEpisodeAvailableEvent)
         {
-            SeriesCursor? cursor = await cursorRepository.TryGet(user.Id, episode.SeriesId);
+            SeriesCursor? cursor = await FindCursor(user, episode);
             if (cursor is not null)
             {
                 // Continue Watching is already showing this series somewhere; leave it alone.
@@ -210,13 +210,29 @@ public sealed class SeriesCursorPlaybackHandler(
         userDataManager.SaveUserData(user, item, data, UserDataSaveReason.PlaybackStart, CancellationToken.None);
     }
 
+    // A show split across library folders has one series item per folder, and the user's
+    // cursor may be keyed by any of them: an episode from the other folder must find it rather
+    // than open a second entry for the same show.
+    private async Task<SeriesCursor?> FindCursor(User user, Episode episode)
+    {
+        foreach (Guid seriesId in seriesService.GetSeriesGroup(episode.SeriesId))
+        {
+            if (await cursorRepository.TryGet(user.Id, seriesId) is { } cursor)
+            {
+                return cursor;
+            }
+        }
+
+        return null;
+    }
+
     private async Task<SeriesCursor> GetOrCreateCursor(
         User user,
         Episode episode,
         long positionTicks,
         DateTimeOffset now)
     {
-        SeriesCursor? cursor = await cursorRepository.TryGet(user.Id, episode.SeriesId);
+        SeriesCursor? cursor = await FindCursor(user, episode);
         if (cursor is not null)
         {
             return cursor;

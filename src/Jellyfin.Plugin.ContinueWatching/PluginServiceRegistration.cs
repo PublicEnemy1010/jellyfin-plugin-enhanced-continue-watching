@@ -37,6 +37,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
             });
         services.AddSingleton<CursorStore>();
         services.AddSingleton<PlayCountStore>();
+        services.AddSingleton<EpisodeReplacementTracker>();
         services.AddScoped<ISeriesCursorRepository, SeriesCursorRepository>();
         services.AddScoped<IMovieCursorRepository, MovieCursorRepository>();
         services.AddScoped<ICursorRepository, CursorRepository>();

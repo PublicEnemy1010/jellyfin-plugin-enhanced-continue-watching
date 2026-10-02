@@ -82,4 +82,31 @@ public sealed class SeriesCursor : Cursor
         UpdatePosition(0, at);
         SetFinished(false);
     }
+
+    /// <summary>
+    /// Points the cursor at another library item without moving it in Continue Watching:
+    /// another copy of the same episode (a re-import, or the disk and stream copies of a show
+    /// split across folders) keeps the position, while a substitute for a vanished episode
+    /// starts from the beginning.
+    /// </summary>
+    public void ReplaceEpisode(Guid episodeId, bool keepPosition)
+    {
+        if (episodeId == EpisodeId)
+        {
+            return;
+        }
+
+        EpisodeId = episodeId;
+        MarkChanged(keepPosition ? PositionTicks : 0);
+    }
+
+    /// <summary>
+    /// Returns a copy of this cursor keyed by another series item of the same show, for when
+    /// the series item it is keyed by leaves the library.
+    /// </summary>
+    public SeriesCursor MoveToSeries(Guid seriesId) =>
+        new(UserId, seriesId, PositionTicks, CreatedAt, UpdatedAt, dirty: true)
+        {
+            EpisodeId = EpisodeId
+        };
 }

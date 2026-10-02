@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.ContinueWatching.Application.Repositories;
 using Jellyfin.Plugin.ContinueWatching.Domain;
@@ -32,9 +33,47 @@ public sealed class SeriesCursorRepository(CursorStore cursorStore) : ISeriesCur
         return Task.FromResult<SeriesCursor?>(cursor);
     }
 
+    public Task<IReadOnlyList<SeriesCursor>> GetByEpisodeId(Guid episodeId) =>
+        GetTracked(cursorStore.Read(d => d
+            .Where(e => e.Value.Type == CursorType.Series && e.Value.EpisodeId == episodeId)
+            .Select(e => e.Key)
+            .ToList()));
+
+    public Task<IReadOnlyList<SeriesCursor>> GetBySeriesId(Guid seriesId) =>
+        GetTracked(cursorStore.Read(d => d
+            .Where(e => e.Value.Type == CursorType.Series && e.Key.ItemId == seriesId)
+            .Select(e => e.Key)
+            .ToList()));
+
+    private async Task<IReadOnlyList<SeriesCursor>> GetTracked(List<CursorKey> keys)
+    {
+        var cursors = new List<SeriesCursor>(keys.Count);
+        foreach (CursorKey key in keys)
+        {
+            if (await TryGet(key.UserId, key.ItemId) is { } cursor)
+            {
+                cursors.Add(cursor);
+            }
+        }
+
+        return cursors;
+    }
+
     public Task Add(SeriesCursor cursor)
     {
         _trackedCursors[new CursorKey(cursor.UserId, cursor.ItemId)] = cursor;
+
+        return Task.CompletedTask;
+    }
+
+    public Task MoveToSeries(SeriesCursor cursor, Guid seriesId)
+    {
+        var oldKey = new CursorKey(cursor.UserId, cursor.ItemId);
+        _trackedCursors.Remove(oldKey);
+        cursorStore.Delete(oldKey);
+
+        SeriesCursor moved = cursor.MoveToSeries(seriesId);
+        _trackedCursors[new CursorKey(moved.UserId, moved.ItemId)] = moved;
 
         return Task.CompletedTask;
     }

@@ -8,6 +8,7 @@ using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions;
 using Jellyfin.Plugin.ContinueWatching.Application.Repositories;
+using Jellyfin.Plugin.ContinueWatching.Application.Services.CursorService;
 using Jellyfin.Plugin.ContinueWatching.Application.Services.SeriesService;
 using Jellyfin.Plugin.ContinueWatching.Domain;
 using Jellyfin.Plugin.HomeScreenSections.Client;
@@ -30,7 +31,8 @@ public sealed class ContinueWatchingSection(
     IUserDataManager userDataManager,
     ILibraryManager libraryManager,
     IDtoService dtoService,
-    ISessionManager sessionManager) : ISectionResultsProvider
+    ISessionManager sessionManager,
+    EpisodeReplacementTracker replacementTracker) : ISectionResultsProvider
 {
 
     // Home Screen Sections calls this synchronously through reflection, so it has to block.
@@ -153,7 +155,9 @@ public sealed class ContinueWatchingSection(
 
         (BaseItemDto Item, Cursor Cursor) UpdateUserData((BaseItemDto Item, Cursor Cursor) arg)
         {
-            if (enableUserData is false or null)
+            // Follow the DTO options, not the raw query value: Jellyfin returns UserData unless a
+            // client explicitly opts out, and Moonfin and Wholphin never send enableUserData.
+            if (!dtoOptions.EnableUserData)
             {
                 return arg;
             }
@@ -163,6 +167,13 @@ public sealed class ContinueWatchingSection(
                 Key = arg.Item.Id.ToString()
             };
             arg.Item.UserData.PlaybackPositionTicks = arg.Cursor.PositionTicks;
+
+            // Clients that merge this row with Next Up (Moonfin by default, Wholphin) re-sort it
+            // by LastPlayedDate, newest first, with missing dates last. A series cursor that
+            // advanced to the next episode points at one that was never played, so its date is
+            // null and the show sinks to the end. Report the cursor's time, the same key the row
+            // is ordered by here, so those clients keep this order.
+            arg.Item.UserData.LastPlayedDate = arg.Cursor.UpdatedAt.UtcDateTime;
             if (arg.Item.RunTimeTicks is > 0)
             {
                 arg.Item.UserData.PlayedPercentage = (double)arg.Cursor.PositionTicks / arg.Item.RunTimeTicks * 100;
@@ -202,6 +213,16 @@ public sealed class ContinueWatchingSection(
             }
 
             BaseItem? displayItem = libraryManager.GetItemById(displayItemId);
+            if (displayItem is null && cursor is SeriesCursor && !replacementTracker.IsAwaitingReplacement(displayItemId))
+            {
+                // The episode left the library and no replacement was linked (a restart between
+                // removal and re-import, or a swap before this was handled), so the entry would
+                // stay invisible for good. Show where the series stands instead, in the same
+                // place in the row.
+                seriesChanged |= await RepairLostEpisode(user, cursor.ItemId);
+                continue;
+            }
+
             if (displayItem is null || !(userDataManager.GetUserData(user, displayItem)?.Played ?? false))
             {
                 continue;
@@ -247,6 +268,32 @@ public sealed class ContinueWatchingSection(
         }
 
         return seriesChanged || movieChanged;
+    }
+
+    private async Task<bool> RepairLostEpisode(User user, Guid seriesId)
+    {
+        if (libraryManager.GetItemById(seriesId) is null)
+        {
+            return false;
+        }
+
+        SeriesCursor? trackedCursor = await seriesCursorRepository.TryGet(user.Id, seriesId);
+        if (trackedCursor is null)
+        {
+            return false;
+        }
+
+        if (await seriesService.GetFirstUnwatchedEpisodeId(user, seriesId) is { } episodeId)
+        {
+            trackedCursor.ReplaceEpisode(episodeId, keepPosition: false);
+        }
+        else
+        {
+            // Everything is watched: the entry is done.
+            trackedCursor.FinishEpisode(null, trackedCursor.UpdatedAt);
+        }
+
+        return true;
     }
 
     private static Guid GetItemId(Cursor cursor)

@@ -164,14 +164,16 @@ public class EventListener(
             }
 
             // Jellyfin raises ItemAdded straight after the first save, and a scanned episode
-            // usually has no series id until the metadata refresh that follows. That refresh
-            // raises ItemUpdated, so park the episode and handle it there.
-            if (episode.SeriesId == Guid.Empty)
+            // usually has no series id (and may have no season/episode numbers) until the
+            // metadata refresh that follows. That refresh raises ItemUpdated, so park the episode
+            // and handle it there: without its numbers a second copy can't be told from a new
+            // episode.
+            if (!IsComplete(episode))
             {
                 PrunePendingEpisodes();
                 pendingEpisodes[episode.Id] = DateTime.UtcNow;
                 logger.LogDebug(
-                    "Newly added episode {EpisodeId} has no series id yet; waiting for its metadata refresh",
+                    "Newly added episode {EpisodeId} has no series id or episode numbers yet; waiting for its metadata refresh",
                     episode.Id);
                 return;
             }
@@ -192,7 +194,7 @@ public class EventListener(
             // Every library update lands here, so keep the common path to a type check and
             // one dictionary lookup.
             if (args.Item is not Episode episode
-                || episode.SeriesId == Guid.Empty
+                || !IsComplete(episode)
                 || !pendingEpisodes.TryRemove(episode.Id, out _))
             {
                 return;
@@ -206,6 +208,11 @@ public class EventListener(
             logger.LogError(exception, "Failed to process updated library item {ItemId}", args.Item?.Id);
         }
     }
+
+    private static bool IsComplete(Episode episode) =>
+        episode.SeriesId != Guid.Empty
+        && episode.ParentIndexNumber is not null
+        && episode.IndexNumber is not null;
 
     private async Task HandleNewEpisode(Episode episode)
     {
